@@ -34,7 +34,7 @@ def run(config):
         logging.info("Governor Starting up: Empty Data Dir")
         # racing to initialize
         wait_for_etcd("cannot initialize member without ETCD", etcd, postgresql)
-        if etcd.race("/initialize", postgresql.name):
+        if etcd.race("/initialize", postgresql.name) or not etcd.members():
             logging.info("Governor Starting up: Initialisation Race ... WON!!!")
             logging.info("Governor Starting up: Initialise Postgres")
             postgresql.initialize()
@@ -69,8 +69,7 @@ def run(config):
     logging.info("Governor Running: Starting Running Loop")
     while True:
         try:
-            logging.info("Governor Running: %s" % ha.run_cycle())
-
+            ha.run_cycle()
             # create replication slots
             if postgresql.is_leader():
                 logging.info("Governor Running: I am the Leader")

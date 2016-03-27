@@ -1,0 +1,37 @@
+loop_wait: 0.25
+etcd:
+  scope: %%ETCD_SCOPE%%
+  ttl: 2
+  # if running etcd with authentication, application authentication by uncommenting the following
+  # authentication:
+    # username: myusername
+    # password: mypassword
+  endpoint: %%ETCD_URL%%
+  timeout: 3
+haproxy_status:
+  listen: 0.0.0.0:15432
+postgresql:
+  name: %%NODE_NAME%%
+  listen: 0.0.0.0:5432
+  data_dir: %%PGDATA%%
+  maximum_lag_on_failover: 1048576 # 1 megabyte in bytes
+  use_tcp_for_local_connection: true
+  replication:
+    username: %%REPLICATION_USER%%
+    password: %%REPLICATION_PASSWORD%%
+    network:  0.0.0.0/0
+  recovery_conf:
+    restore_command: cp ~/wal_archive/%f %p &> /dev/null
+  parameters:
+    archive_mode: "on"
+    wal_level: hot_standby
+    synchronous_commit: "local"
+    synchronous_standby_names: '*'
+    archive_command: mkdir -p ~/wal_archive && cp %p ~/wal_archive/%f &> /dev/null
+    max_wal_senders: 10
+    wal_keep_segments: 10
+    archive_timeout: 1800s
+    max_replication_slots: 10
+    hot_standby: "on"
+  #initdb_parameters:
+    #- '--encoding=SQL_ASCII'

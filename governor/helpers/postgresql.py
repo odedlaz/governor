@@ -1,10 +1,21 @@
 import os, psycopg2, re, time
 import logging
-
+import platform
 from urlparse import urlparse
-
+from tempfile import NamedTemporaryFile
 
 logger = logging.getLogger(__name__)
+
+PGPASS_FILE = os.path.join(os.path.expanduser("~"), ".pgpass")
+
+def create_connstr(username, password, hostname, port):
+    host = hostname if hostname != '0.0.0.0' else platform.uname()[1]
+    fmt = "postgres://{credentials}@{host}:{port}/postgres"
+    credentials = ":".join(filter(None, [username, password]))
+    connstr = fmt.format(credentials=credentials,
+                         host=host,
+                         port=port)
+    return connstr
 
 class Postgresql:
 
@@ -12,12 +23,15 @@ class Postgresql:
         self.name = config["name"]
         self.host, self.port = config["listen"].split(":")
         self.data_dir = config["data_dir"]
-        self.replication = config["replication"]
 
+        self.replication = config["replication"]
         self.config = config
 
         self.cursor_holder = None
-        self.connection_string = "postgres://%s:%s@%s:%s/postgres" % (self.replication["username"], self.replication["password"], self.host, self.port)
+        self.connection_string = create_connstr(self.replication["username"],
+                                                self.replication["password"],
+                                                self.host,
+                                                self.port)
 
         self.conn = None
 
@@ -77,24 +91,37 @@ class Postgresql:
 
         return False
 
+    def write_pgpass(self, hostname, port, username, password):
+        with open(PGPASS_FILE, "w") as f:
+            os.chmod(f.name, 0600)
+            f.write("%(hostname)s:%(port)s:*:%(username)s:%(password)s\n" %
+                    {"hostname": hostname,
+                     "port": port,
+                     "username": username,
+                     "password": password})
+
     def sync_from_leader(self, leader):
         leader = urlparse(leader["address"])
+        if not os.path.exists(PGPASS_FILE):
+            self.write_pgpass(leader.hostname,
+                              leader.port,
+                              leader.username,
+                              leader.password)
 
-        f = open("./pgpass", "w")
-        f.write("%(hostname)s:%(port)s:*:%(username)s:%(password)s\n" %
-                {"hostname": leader.hostname, "port": leader.port, "username": leader.username, "password": leader.password})
-        f.close()
-
-        os.system("chmod 600 pgpass")
-
-        return os.system("PGPASSFILE=pgpass pg_basebackup -R -D %(data_dir)s --host=%(host)s --port=%(port)s -U %(username)s" %
-                {"data_dir": self.data_dir, "host": leader.hostname, "port": leader.port, "username": leader.username}) == 0
+        sync_cmd = "pg_basebackup -R -D {data_dir} --host={host} --port={port} -U {username}"
+        sync_cmd_args = {"data_dir": self.data_dir,
+                         "host": leader.hostname,
+                         "port": leader.port,
+                         "username": leader.username}
+        return os.system(sync_cmd.format(**sync_cmd_args)) == 0
 
     def is_leader(self):
         return not self.query("SELECT pg_is_in_recovery();").fetchone()[0]
 
     def is_running(self):
-        return os.system("pg_ctl status -D %s > /dev/null" % self.data_dir) == 0
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        return sock.connect_ex((self.host, int(self.port))) == 0
 
     def start(self):
         if self.is_running():
@@ -145,7 +172,13 @@ class Postgresql:
         if state_store.last_leader_operation() is None:
             return True
 
-        if (state_store.last_leader_operation() - self.xlog_position()) > self.config["maximum_lag_on_failover"]:
+        xlog_position = self.xlog_position()
+        if not xlog_position:
+            logging.warning("xlog position missing, probably didn't start with recovery")
+            return True
+
+        if (state_store.last_leader_operation() - xlog_position) > self.config["maximum_lag_on_failover"]:
+            logging.warning("we're lagging behind the max lag time: %s", self.config["maximum_lag_on_failover"])
             return False
 
         for member in state_store.members():
@@ -157,13 +190,22 @@ class Postgresql:
                 member_cursor = member_conn.cursor()
                 member_cursor.execute("SELECT %s - (pg_last_xlog_replay_location() - '0/000000'::pg_lsn) AS bytes;" % self.xlog_position())
                 xlog_diff = member_cursor.fetchone()[0]
-                logger.info([self.name, member["hostname"], xlog_diff])
+
+                logger.debug("xlog diff from us (%s) to %s is: %s",
+                             self.name,
+                             member["hostname"],
+                             xlog_diff)
+
                 if xlog_diff < 0:
                     member_cursor.close()
+                    logging.warning("xlog diff %s to %s is problematic",
+                                    xlog_diff,
+                                    member["hostname"])
                     return False
                 member_cursor.close()
             except psycopg2.OperationalError:
                 continue
+        logging.debug("we're a healthy node!")
         return True
 
     def replication_slot_name(self):
@@ -172,10 +214,10 @@ class Postgresql:
         return member
 
     def write_pg_hba(self):
-        f = open("%s/pg_hba.conf" % self.data_dir, "a")
-        f.write("host replication %(username)s %(network)s md5" %
-                {"username": self.replication["username"], "network": self.replication["network"]})
-        f.close()
+        args = {"username": self.replication["username"],
+                "network": self.replication["network"]}
+        with open("%s/pg_hba.conf" % self.data_dir, "a") as f:
+            f.write("host replication %(username)s %(network)s md5\n" % args)
 
     def write_recovery_conf(self, leader_hash):
         f = open("%s/recovery.conf" % self.data_dir, "w")
@@ -220,7 +262,9 @@ primary_conninfo = 'user=%(user)s password=%(password)s host=%(hostname)s port=%
         self.query("CREATE USER \"%s\" WITH REPLICATION ENCRYPTED PASSWORD '%s';" % (self.replication["username"], self.replication["password"]))
 
     def xlog_position(self):
-        return self.query("SELECT pg_last_xlog_replay_location() - '0/0000000'::pg_lsn;").fetchone()[0]
+        res = self.query("SELECT pg_last_xlog_replay_location() - '0/0000000'::pg_lsn;").fetchone()[0]
+        logging.debug("xlog position: %s", res)
+        return res
 
     def last_operation(self):
         if self.is_leader():

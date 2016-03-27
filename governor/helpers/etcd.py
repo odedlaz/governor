@@ -60,9 +60,9 @@ class Etcd:
         except urllib2.HTTPError as e:
             if e.code == 404:
                 return None
-            raise helpers.errors.CurrentLeaderError("Etcd is not responding properly")
+            raise errors.CurrentLeaderError("Etcd is not responding properly")
         except urllib2.URLError:
-            raise helpers.errors.CurrentLeaderError("Etcd is not responding properly")
+            raise errors.CurrentLeaderError("Etcd is not responding properly")
 
     def members(self):
         try:
@@ -76,9 +76,9 @@ class Etcd:
         except urllib2.HTTPError as e:
             if e.code == 404:
                 return None
-            raise helpers.errors.CurrentLeaderError("Etcd is not responding properly")
+            raise errors.CurrentLeaderError("Etcd is not responding properly")
         except urllib2.URLError:
-            raise helpers.errors.CurrentLeaderError("Etcd is not responding properly")
+            raise errors.CurrentLeaderError("Etcd is not responding properly")
 
 
     def touch_member(self, member, connection_string):

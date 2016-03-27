@@ -24,8 +24,6 @@ def find_version(*file_paths):
         return version_match.group(1)
     raise RuntimeError("Unable to find version string.")
 
-LONG_DESCRIPTION = read('README.md')
-
 setup(
     name='governor',
     version=find_version('governor', '__init__.py'),
@@ -37,7 +35,6 @@ setup(
         'pyyaml'
         ],
     description='A Template for PostgreSQL HA with etcd',
-    long_description=LONG_DESCRIPTION,
     entry_points={
         'console_scripts': [
             'governor = scripts.governorctl:main',
@@ -47,7 +44,7 @@ setup(
     include_package_data=True,
     package_data={'governor.helpers': ['helpers/*.py']},
     platforms='any',
-    zip_safe=False,
+    zip_safe=True,
     classifiers=[
         'Programming Language :: Python',
         'Programming Language :: Python :: 2',

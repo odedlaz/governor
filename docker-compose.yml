@@ -1,0 +1,14 @@
+version: '2'
+
+services:
+  node:
+    build: .
+    ports:
+      - "5432"
+      - "15432"
+    networks:
+      - postgres
+    volumes:
+      - /tmp/postgres-ha:/var/lib/postgresql/data
+networks:
+  postgres:
