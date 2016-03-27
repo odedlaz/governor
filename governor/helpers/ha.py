@@ -88,11 +88,11 @@ class Ha:
                     self.state_handler.start()
                     return "postgresql was stopped.  starting again."
                 return "no action.  not healthy enough to do anything."
-        except helpers.errors.CurrentLeaderError:
+        except errors.CurrentLeaderError:
             logger.error("failed to fetch current leader from etcd")
         except psycopg2.OperationalError:
             logger.error("Error communicating with Postgresql.  Will try again.")
-        except helpers.errors.HealthiestMemberError:
+        except errors.HealthiestMemberError:
             logger.error("failed to determine healthiest member fromt etcd")
 
     def run(self):

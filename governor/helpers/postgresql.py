@@ -1,10 +1,19 @@
 import os, psycopg2, re, time
 import logging
-
+import platform
 from urlparse import urlparse
-
+from tempfile import NamedTemporaryFile
 
 logger = logging.getLogger(__name__)
+
+def create_connstr(username, password, hostname, port):
+    host = hostname if hostname != '0.0.0.0' else platform.uname()[1]
+    fmt = "postgres://{credentials}@{host}:{port}/postgres"
+    credentials = ":".join(filter(None, [username, password]))
+    connstr = fmt.format(credentials=credentials,
+                         host=host,
+                         port=port)
+    return connstr
 
 class Postgresql:
 
@@ -17,7 +26,10 @@ class Postgresql:
         self.config = config
 
         self.cursor_holder = None
-        self.connection_string = "postgres://%s:%s@%s:%s/postgres" % (self.replication["username"], self.replication["password"], self.host, self.port)
+        self.connection_string = create_connstr(self.replication["username"],
+                                                self.replication["password"],
+                                                self.host,
+                                                self.port)
 
         self.conn = None
 
@@ -80,15 +92,22 @@ class Postgresql:
     def sync_from_leader(self, leader):
         leader = urlparse(leader["address"])
 
-        f = open("./pgpass", "w")
-        f.write("%(hostname)s:%(port)s:*:%(username)s:%(password)s\n" %
-                {"hostname": leader.hostname, "port": leader.port, "username": leader.username, "password": leader.password})
-        f.close()
 
-        os.system("chmod 600 pgpass")
+        with NamedTemporaryFile("w") as f:
+            os.chmod(f.name, 0600)
+            f.file.write("%(hostname)s:%(port)s:*:%(username)s:%(password)s\n" %
+                    {"hostname": leader.hostname,
+                     "port": leader.port,
+                     "username": leader.username,
+                     "password": leader.password})
 
-        return os.system("PGPASSFILE=pgpass pg_basebackup -R -D %(data_dir)s --host=%(host)s --port=%(port)s -U %(username)s" %
-                {"data_dir": self.data_dir, "host": leader.hostname, "port": leader.port, "username": leader.username}) == 0
+            sync_cmd = "PGPASSFILE={filename} pg_basebackup -R -D {data_dir} --host={host} --port={port} -U {username}"
+            sync_cmd_args = {"filename": f.name,
+                             "data_dir": self.data_dir,
+                             "host": leader.hostname,
+                             "port": leader.port,
+                             "username": leader.username}
+            return os.system(sync_cmd.format(**sync_cmd_args) == 0
 
     def is_leader(self):
         return not self.query("SELECT pg_is_in_recovery();").fetchone()[0]
@@ -172,10 +191,10 @@ class Postgresql:
         return member
 
     def write_pg_hba(self):
-        f = open("%s/pg_hba.conf" % self.data_dir, "a")
-        f.write("host replication %(username)s %(network)s md5" %
-                {"username": self.replication["username"], "network": self.replication["network"]})
-        f.close()
+        args = {"username": self.replication["username"],
+                "network": self.replication["network"]}
+        with open("%s/pg_hba.conf" % self.data_dir, "a") as f:
+            f.write("host replication %(username)s %(network)s md5\n" % args)
 
     def write_recovery_conf(self, leader_hash):
         f = open("%s/recovery.conf" % self.data_dir, "w")
