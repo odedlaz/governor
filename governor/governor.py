@@ -7,9 +7,11 @@ from helpers.etcd import Etcd
 from helpers.postgresql import Postgresql
 from helpers.ha import Ha
 
+
 # stop postgresql on script exit
 def stop_postgresql(postgresql):
     postgresql.stop()
+
 
 # wait for etcd to be available
 def wait_for_etcd(message, etcd, postgresql):
@@ -22,6 +24,7 @@ def wait_for_etcd(message, etcd, postgresql):
             logging.info("waiting on etcd: %s" % message)
             time.sleep(5)
 
+
 def run(config):
     etcd = Etcd(config["etcd"])
     postgresql = Postgresql(config["postgresql"])
@@ -29,7 +32,7 @@ def run(config):
 
     atexit.register(stop_postgresql, postgresql)
     logging.info("Governor Starting up")
-# is data directory empty?
+    # is data directory empty?
     if postgresql.data_directory_empty():
         logging.info("Governor Starting up: Empty Data Dir")
         # racing to initialize
@@ -73,10 +76,12 @@ def run(config):
             # create replication slots
             if postgresql.is_leader():
                 logging.info("Governor Running: I am the Leader")
-                for node in etcd.get_client_path("/members?recursive=true")["node"]["nodes"]:
+                for node in etcd.get_client_path("/members?recursive=true").get("node", {}).get("nodes", []):
                     member = node["key"].split('/')[-1]
                     if member != postgresql.name:
-                        postgresql.query("DO LANGUAGE plpgsql $$DECLARE somevar VARCHAR; BEGIN SELECT slot_name INTO somevar FROM pg_replication_slots WHERE slot_name = '%(slot)s' LIMIT 1; IF NOT FOUND THEN PERFORM pg_create_physical_replication_slot('%(slot)s'); END IF; END$$;" % {"slot": member})
+                        postgresql.query(
+                            "DO LANGUAGE plpgsql $$DECLARE somevar VARCHAR; BEGIN SELECT slot_name INTO somevar FROM pg_replication_slots WHERE slot_name = '%(slot)s' LIMIT 1; IF NOT FOUND THEN PERFORM pg_create_physical_replication_slot('%(slot)s'); END IF; END$$;" % {
+                                "slot": member})
             etcd.touch_member(postgresql.name, postgresql.connection_string)
 
             time.sleep(config["loop_wait"])

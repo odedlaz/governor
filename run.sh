@@ -22,7 +22,7 @@ if [ ! -z "${INIT}" ]; then
   set -e
 fi
 
-NODE_NAME=${CLUSTER_NAME}_node_${NODE_ID}
+NODE_NAME=${CLUSTER_NAME}000node${NODE_ID}
 
 mkdir -p /tmp/postgres-ha/$NODE_NAME
 docker run -t -i -h $NODE_NAME \
