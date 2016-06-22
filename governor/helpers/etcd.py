@@ -1,11 +1,18 @@
-import urllib2, json, os, time, base64
+import base64
+import json
 import logging
+import ssl
+import time
+import urllib2
 from urllib import urlencode
+
+from governor import helpers
 from governor.helpers import errors
 
 logger = logging.getLogger(__name__)
 
-class Etcd:
+
+class Etcd(object):
     def __init__(self, config):
         self.scope = config["scope"]
         self.endpoint = config["endpoint"]
@@ -24,11 +31,12 @@ class Etcd:
             try:
                 request = urllib2.Request(self.client_url(path))
                 if self.authentication is not None:
-                    base64string = base64.encodestring('%s:%s' % (self.authentication["username"], self.authentication["password"])).replace('\n', '')
+                    base64string = base64.encodestring(
+                        '%s:%s' % (self.authentication["username"], self.authentication["password"])).replace('\n', '')
                     request.add_header("Authorization", "Basic %s" % base64string)
                 response = urllib2.urlopen(request, timeout=self.timeout).read()
                 break
-            except (urllib2.HTTPError, urllib2.URLError) as e:
+            except (urllib2.HTTPError, urllib2.URLError, ssl.SSLError) as e:
                 attempts += 1
                 if attempts < max_attempts:
                     logger.warning("Failed to return %s, trying again. (%s of %s)" % (path, attempts, max_attempts))
@@ -43,7 +51,8 @@ class Etcd:
     def put_client_path(self, path, data):
         request = urllib2.Request(self.client_url(path), data=urlencode(data).replace("false", "False"))
         if self.authentication is not None:
-            base64string = base64.encodestring('%s:%s' % (self.authentication["username"], self.authentication["password"])).replace('\n', '')
+            base64string = base64.encodestring(
+                '%s:%s' % (self.authentication["username"], self.authentication["password"])).replace('\n', '')
             request.add_header("Authorization", "Basic %s" % base64string)
         request.get_method = lambda: 'PUT'
         urllib2.urlopen(request, timeout=self.timeout).read()
@@ -60,9 +69,9 @@ class Etcd:
         except urllib2.HTTPError as e:
             if e.code == 404:
                 return None
-            raise errors.CurrentLeaderError("Etcd is not responding properly")
-        except urllib2.URLError:
-            raise errors.CurrentLeaderError("Etcd is not responding properly")
+            raise helpers.errors.CurrentLeaderError("Etcd is not responding properly")
+        except (urllib2.URLError, ssl.SSLError):
+            raise helpers.errors.CurrentLeaderError("Etcd is not responding properly")
 
     def members(self):
         try:
@@ -76,10 +85,9 @@ class Etcd:
         except urllib2.HTTPError as e:
             if e.code == 404:
                 return None
-            raise errors.CurrentLeaderError("Etcd is not responding properly")
-        except urllib2.URLError:
-            raise errors.CurrentLeaderError("Etcd is not responding properly")
-
+            raise helpers.errors.CurrentLeaderError("Etcd is not responding properly")
+        except (urllib2.URLError, ssl.SSLError):
+            raise helpers.errors.CurrentLeaderError("Etcd is not responding properly")
 
     def touch_member(self, member, connection_string):
         self.put_client_path("/members/%s" % member, {"value": connection_string, "ttl": self.ttl})
@@ -94,12 +102,13 @@ class Etcd:
             if e.code == 412:
                 logger.info("Could not take out TTL lock: %s" % e)
             return False
-        except urllib2.URLError:
+        except (urllib2.URLError, ssl.SSLError):
             return False
 
     def update_leader(self, state_handler):
         try:
-            self.put_client_path("/leader", {"value": state_handler.name, "ttl": self.ttl, "prevValue": state_handler.name})
+            self.put_client_path("/leader",
+                                 {"value": state_handler.name, "ttl": self.ttl, "prevValue": state_handler.name})
             self.put_client_path("/optime/leader", {"value": state_handler.last_operation()})
         except (urllib2.HTTPError, urllib2.URLError) as e:
             logger.error("Error updating leader lock and optime on ETCD for primary.")
@@ -112,9 +121,9 @@ class Etcd:
             if e.code == 404:
                 logger.error("Error updating TTL on ETCD for primary.")
                 return None
-        except urllib2.URLError:
-                logger.error("Error updating TTL on ETCD for primary.")
-                return None
+        except (urllib2.URLError, ssl.SSLError):
+            logger.error("Error updating TTL on ETCD for primary.")
+            return None
 
     def leader_unlocked(self):
         try:
@@ -128,19 +137,17 @@ class Etcd:
             return False
         except ValueError:
             return False
+        except ssl.SSLError:
+            return False
 
     def am_i_leader(self, value):
         try:
             reponse = self.get_client_path("/leader")
             logger.info("Lock owner: %s; I am %s" % (reponse["node"]["value"], value))
             return reponse["node"]["value"] == value
-        except urllib2.HTTPError:
+        except (urllib2.HTTPError, ssl.SSLError, urllib2.URLError):
             logger.error("Couldn't reach etcd")
             return False
-        except urllib2.URLError:
-            logger.error("Couldn't reach etcd")
-            return False
-
 
     def race(self, path, value):
         while True:
@@ -152,6 +159,6 @@ class Etcd:
                 else:
                     logger.warning("etcd is not ready for connections")
                     time.sleep(10)
-            except urllib2.URLError:
-                    logger.warning("Issue connecting to etcd")
-                    time.sleep(10)
+            except (urllib2.URLError, ssl.SSLError):
+                logger.warning("Issue connecting to etcd")
+                time.sleep(10)
