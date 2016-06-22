@@ -25,3 +25,7 @@ RUN chown -R postgres /postgres.yml
 RUN cd /tmp/$FILENAME \
     && python setup.py install \
     && chown -R postgres:postgres /home/postgres
+
+EXPOSE 5432
+EXPOSE 15432
+
